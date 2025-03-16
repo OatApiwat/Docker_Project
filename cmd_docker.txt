@@ -1,0 +1,105 @@
+##MSSQL
+
+docker volume create mssql_data
+docker volume create sql_server_data
+docker run -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=YourStrongPassword123 -p 1433:1433 --name project_iot_mssql -v sql_server_data:/var/opt/mssql -d mcr.microsoft.com/mssql/server:2022-latest
+
+mkdir D:\mssql_data
+icacls "D:\mssql_data" /grant Everyone:(OI)(CI)F /T
+docker run -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD=YourStrongPassword123 -p 1433:1433 --name sql_server_container -v D:\mssql_data:/var/opt/mssql -d mcr.microsoft.com/mssql/server:2022-latest
+
+
+docker ps
+netsh advfirewall firewall add rule name="Allow SQL Server 1433" protocol=TCP dir=in localport=1433 action=allow
+
+docker logs sqlserver
+docker ps -a
+
+docker exec -it -u root project_iot_mssql bash
+
+##แก้ sa ลอค
+ALTER LOGIN sa WITH PASSWORD = 'NewStrong!Passw0rd';
+ALTER LOGIN sa ENABLE;
+
+##MOSQUITTO
+
+docker pull eclipse-mosquitto
+mkdir D:\mosquitto
+mkdir D:\mosquitto\config
+mkdir D:\mosquitto\data
+mkdir D:\mosquitto\log
+
+สร้างไฟล์ mosquitto.conf
+
+listener 1883
+allow_anonymous true
+persistence true
+persistence_location /mosquitto/data/
+log_dest file /mosquitto/log/mosquitto.log
+
+docker run -d --name mosquitto -p 1883:1883 -p 9001:9001 -v D:\mosquitto\config\mosquitto.conf:/mosquitto/config/mosquitto.conf -v D:\mosquitto\data:/mosquitto/data -v D:\mosquitto\log:/mosquitto/log eclipse-mosquitto
+
+##ให้ใช้งานทุกครั้งที่เครื่องทำงาน
+docker update --restart always $(docker ps -aq)
+
+docker run --rm -it -v $(pwd)/mosquitto/config:/mosquitto/config eclipse-mosquitto mosquitto_passwd -c /mosquitto/config/passwd admin
+
+
+docker exec -it project_iot_influxdb influx
+CREATE DATABASE sensor_db
+USE sensor_db;
+SHOW MEASUREMENTS;
+SELECT * FROM sensor_data ORDER BY time DESC LIMIT 10;
+SELECT * FROM sensor_data ORDER BY time DESC;
+
+exit
+CREATE RETENTION POLICY "one_month" ON "sensor_db" DURATION 30d REPLICATION 1 DEFAULT;
+
+
+
+
+##Docker compose
+docker-compose up -d
+docker-compose down //remove compose
+docker-compose down -v //remove compose with volume
+docker-compose restart
+
+
+##python
+pip install paho-mqtt influxdb
+
+##Influxdb
+docker exec -it project_iot_influxdb influx
+
+CREATE RETENTION POLICY "one_month" ON "sensor_db" DURATION 30d REPLICATION 1
+CREATE DATABASE sensor_db
+SHOW DATABASES;
+USE sensor_db;
+INSERT sensor_data,sensor_id=001,location=bangkok temperature=30.5,humidity=65.2,pressure=1013.2;
+INSERT sensor_data,sensor_id=002,location=chiangmai temperature=25.3,humidity=70.1,pressure=1008.5;
+INSERT sensor_data,sensor_id=003,location=phuket temperature=28.7,humidity=80.3,pressure=1011.7;
+
+SELECT * FROM sensor_data WHERE sensor_id='001'
+SELECT temperature FROM sensor_data WHERE location='bangkok'
+SELECT * FROM sensor_data ORDER BY time DESC LIMIT 1
+SELECT MEAN(temperature) FROM sensor_data WHERE time > now() - 1d
+SELECT MAX(temperature) FROM sensor_data WHERE time > now() - 7d
+SELECT MEAN(humidity) FROM sensor_data WHERE time > now() - 1d GROUP BY time(1h)
+CREATE RETENTION POLICY "thirty_days" ON "sensor_db" DURATION 30d REPLICATION 1 DEFAULT
+
+CREATE CONTINUOUS QUERY "cq_avg_sensor" ON "sensor_db"
+BEGIN
+  SELECT MEAN(temperature), MEAN(humidity), MEAN(pressure) 
+  INTO "sensor_avg"
+  FROM "sensor_data"
+  GROUP BY time(1h)
+END
+
+influxd backup -database sensor_db /path/to/backup
+influxd restore -database sensor_db /path/to/backup
+
+docker exec influxdb influxd backup -database sensor_db /var/lib/influxdb/backup
+docker exec influxdb influxd restore -database sensor_db /var/lib/influxdb/backup
+
+
+
